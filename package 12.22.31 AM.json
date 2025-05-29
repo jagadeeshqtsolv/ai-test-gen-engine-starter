@@ -1,0 +1,25 @@
+{
+  "name": "ai-test-gen-engine",
+  "version": "0.1.0",
+  "scripts": {
+    "start": "ts-node src/workflows/run.ts",
+    "lint": "prettier --check .",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "@babel/parser": "^7.21.3",
+    "@babel/traverse": "^7.21.3",
+    "@octokit/rest": "^19.0.7",
+    "axios": "^1.3.4",
+    "dotenv": "^16.0.3",
+    "fs-extra": "^11.1.0",
+    "openai": "^4.9.0",
+    "prettier": "^2.8.4",
+    "simple-git": "^3.16.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.0.4"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4"
+  }
+}
