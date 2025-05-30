@@ -1,76 +1,123 @@
-import * as dotenv from "dotenv";
-import * as fs from "fs";
+import { execSync } from "child_process";
 import * as path from "path";
-import { getChangedFiles, getFileContentAtRef } from "./git/diffAnalyzer"; // Your existing git helpers
-import { extractExportedFunctions, FuncInfo } from "./parser/functionExtractor";
-import { generateTestCase } from "./ai/testGenerator";
-import { splitTestOutput } from "./utils/testSplitter";
+import * as fs from "fs";
+import * as os from "os";
+import { generateTestCase } from "./ai/testGenerator"; // Adjust path as needed
+import { splitTestOutput } from "./utils/testSplitter"; // Adjust path as needed
 
-dotenv.config();
-
-(async () => {
+function runGitCommand(cmd: string, cwd: string): string {
     try {
-        const baseRef = process.env.BASE_REF;
-        const headRef = process.env.HEAD_REF;
+        return execSync(cmd, { cwd, stdio: "pipe" }).toString().trim();
+    } catch (e: any) {
+        throw new Error(`Git command failed: ${cmd}\n${e.message}`);
+    }
+}
 
-        if (!baseRef || !headRef) {
-            throw new Error("BASE_REF and HEAD_REF must be defined in .env");
-        }
+function cloneRepo(repoUrl: string, targetDir: string) {
+    if (fs.existsSync(targetDir)) {
+        fs.rmSync(targetDir, { recursive: true, force: true });
+    }
+    runGitCommand(`git clone ${repoUrl} ${targetDir}`, process.cwd());
+}
 
-        const files = getChangedFiles(baseRef, headRef);
-        console.log("📂 Changed files:", files);
+function getChangedFiles(baseBranch: string, headBranch: string, cwd: string): string[] {
+    const diffCmd = `git diff --name-only ${baseBranch} ${headBranch} -- '*.ts'`;
+    const output = runGitCommand(diffCmd, cwd);
+    if (!output) return [];
+    return output.split("\n").filter(f => f.trim() !== "");
+}
 
-        for (const file of files) {
-            if (file.startsWith(".idea/") || !file.endsWith(".ts")) continue;
+function extractExportedFunctions(sourceCode: string): { name: string; code: string }[] {
+    const functionDeclRegex = /export function (\w+)\s*\([^)]*\)\s*:\s*[^ {]+\s*\{[\s\S]*?\}/gm;
+    const functionExprRegex = /export const (\w+)\s*=\s*\([^)]*\)\s*:\s*[^=]+\s*=>\s*\{[\s\S]*?\}/gm;
 
-            const content = getFileContentAtRef(file, headRef);
-            console.log(`📄 Content of ${file} at ${headRef} (first 500 chars):\n`, content.substring(0, 500));
+    const results: { name: string; code: string }[] = [];
 
-            const functions: FuncInfo[] = extractExportedFunctions(content);
-            if (functions.length === 0) {
-                console.warn(`⚠️ No exported functions found in ${file}`);
+    let match;
+    while ((match = functionDeclRegex.exec(sourceCode)) !== null) {
+        results.push({ name: match[1], code: match[0] });
+    }
+    while ((match = functionExprRegex.exec(sourceCode)) !== null) {
+        results.push({ name: match[1], code: match[0] });
+    }
+
+    return results;
+}
+
+function getFileContentAtRef(filePath: string, ref: string, cwd: string): string {
+    return runGitCommand(`git show ${ref}:${filePath}`, cwd);
+}
+
+async function main() {
+    try {
+        const repoUrl = process.env.GITHUB_REPO_URL || "https://github.com/jagadeeshqtsolv/ky.git";
+        const baseRef = process.env.BASE_REF || "main";
+        const headRef = process.env.HEAD_REF || "feature/add-utils-function";
+
+        const tmpDir = path.join(os.tmpdir(), "ky-repo");
+
+        console.log(`Cloning repo ${repoUrl} into ${tmpDir}`);
+        cloneRepo(repoUrl, tmpDir);
+
+        runGitCommand(`git fetch origin`, tmpDir);
+
+        runGitCommand(`git checkout -B temp-base origin/${baseRef}`, tmpDir);
+        runGitCommand(`git checkout -B temp-head origin/${headRef}`, tmpDir);
+
+        const changedFiles = getChangedFiles("temp-base", "temp-head", tmpDir);
+        console.log("📂 Changed .ts files:", changedFiles);
+
+        for (const file of changedFiles) {
+            if (!file.endsWith(".ts")) continue;
+
+            const content = getFileContentAtRef(file, "temp-head", tmpDir);
+            const exportedFunctions = extractExportedFunctions(content);
+            if (exportedFunctions.length === 0) {
+                console.log(`⚠️ No exported functions found in ${file}, skipping`);
                 continue;
             }
 
-            for (const func of functions) {
-                console.log(`🚀 Generating test for: ${func.name}`);
+            const sourceDir = path.dirname(file);
+            const sourceFileName = path.basename(file, ".ts");
+            const testDir = path.join("tests", sourceDir);
+            fs.mkdirSync(testDir, { recursive: true });
+
+            for (const func of exportedFunctions) {
+                console.log(`🚀 Generating test for function: ${func.name} in file: ${file}`);
 
                 let aiOutput = "";
                 try {
                     aiOutput = await generateTestCase(func);
                 } catch (err) {
-                    console.error(`❌ Error generating test case for ${func.name}:`, err);
+                    console.error(`❌ Failed to generate test for ${func.name}:`, err);
                     continue;
                 }
 
-                let testCode = "";
                 let metadata = "";
-
+                let testCode = "";
                 try {
-                    const result = splitTestOutput(aiOutput);
-                    testCode = result.testCode;
-                    metadata = result.metadata;
+                    const split = splitTestOutput(aiOutput);
+                    metadata = split.metadata;
+                    testCode = split.testCode;
                 } catch (err) {
-                    console.error(`❌ Error splitting AI output for ${func.name}:`, err);
-                    console.log("AI Output was:\n", aiOutput);
+                    console.error(`❌ Failed to split AI output for ${func.name}:`, err);
                     continue;
                 }
 
-                const relativeDir = path.dirname(file);
-                const fileName = path.basename(file, ".ts");
-                const testDir = path.join("tests", relativeDir);
-                const testFilePath = path.join(testDir, `${fileName}.test.ts`);
-                const metaFilePath = path.join(testDir, `${fileName}.meta.txt`);
+                const testFilePath = path.join(testDir, `${sourceFileName}.${func.name}.test.ts`);
+                const metaFilePath = path.join(testDir, `${sourceFileName}.${func.name}.test.meta.md`);
 
-                fs.mkdirSync(testDir, { recursive: true });
-                fs.writeFileSync(testFilePath, testCode);
-                fs.writeFileSync(metaFilePath, metadata);
+                fs.writeFileSync(testFilePath, testCode, "utf-8");
+                fs.writeFileSync(metaFilePath, metadata, "utf-8");
 
-                console.log(`✅ Test written to ${testFilePath}`);
-                console.log(`📝 Metadata written to ${metaFilePath}`);
+                console.log(`✅ Test generated: ${testFilePath}`);
+                console.log(`🧾 Metadata generated: ${metaFilePath}`);
             }
         }
-    } catch (err) {
-        console.error("❌ Fatal error:", err);
+    } catch (err: any) {
+        console.error("Fatal error in run.ts:", err);
+        process.exit(1);
     }
-})();
+}
+
+main();

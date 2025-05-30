@@ -1,8 +1,9 @@
 export function splitTestOutput(output: string): { metadata: string; testCode: string } {
-    const normalizedOutput = output.replace(/\r\n/g, "\n");
+    const normalizedOutput = output.replace(/\r\n/g, "\n").trim();
 
-    const part1Regex = /=== PART 1: METADATA ===\n([\s\S]*?)\n=== PART 2: TEST CODE ===/;
-    const part2Regex = /=== PART 2: TEST CODE ===\n([\s\S]*)$/;
+    // Regex to match parts, allowing optional spaces before/after header lines
+    const part1Regex = /^\s*={3} PART 1: METADATA ={3}\s*\n([\s\S]*?)\n^\s*={3} PART 2: TEST CODE ={3}\s*$/m;
+    const part2Regex = /^\s*={3} PART 2: TEST CODE ={3}\s*\n([\s\S]*)$/m;
 
     const part1Match = normalizedOutput.match(part1Regex);
     const part2Match = normalizedOutput.match(part2Regex);

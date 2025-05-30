@@ -1,26 +1,38 @@
 import { execSync } from "child_process";
 
-const WORKDIR = process.env.WORKDIR || ".";
-
-export function getChangedFiles(baseRef: string, headRef: string): string[] {
-  // Use refs with origin/ prefix to ensure remote refs are compared
-  const cmd = `git diff --name-only origin/${baseRef} origin/${headRef}`;
+export function getChangedFiles(
+    baseBranch: string,
+    featureBranch: string,
+    remote = "origin",
+    cwd = process.cwd()
+): string[] {
   try {
-    const output = execSync(cmd, { cwd: WORKDIR }).toString();
-    return output.split("\n").filter(Boolean);
-  } catch (err) {
-    console.error("Error fetching changed files:", err);
+    // No need to fetch branches again here, done outside in run.ts
+
+    const diffOutput = execSync(
+        `git diff --name-only ${baseBranch} ${featureBranch} --`,
+        { encoding: "utf-8", cwd }
+    );
+
+    return diffOutput.split("\n").filter(Boolean);
+  } catch (error) {
+    console.error("Error fetching changed files:", error);
     return [];
   }
 }
 
-export function getFileContentAtRef(filePath: string, ref: string): string {
-  // Use origin/ prefix to read from remote branch ref
-  const cmd = `git show origin/${ref}:${filePath}`;
+export function getFileContentAtRef(
+    filePath: string,
+    ref: string,
+    cwd = process.cwd()
+): string {
   try {
-    return execSync(cmd, { cwd: WORKDIR }).toString();
-  } catch (err) {
-    console.error(`Error fetching content for ${filePath} at ${ref}:`, err);
+    return execSync(`git show ${ref}:${filePath}`, {
+      encoding: "utf-8",
+      cwd,
+    });
+  } catch (error) {
+    console.error(`Error getting file content for ${filePath} at ${ref}`, error);
     return "";
   }
 }
